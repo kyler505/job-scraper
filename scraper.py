@@ -683,11 +683,15 @@ def build_notion_page_properties(job: Job, schema: dict, mapping: PropertyMappin
     title_is_company_like = any(candidate in title_name_norm for candidate in [normalize(c) for c in COMPANY_CANDIDATES])
     title_is_role_like = any(candidate in title_name_norm for candidate in [normalize(c) for c in ROLE_CANDIDATES])
 
-    title_value = job.title
-    if title_is_company_like and mapping.company:
-        title_value = f"{job.company} — {job.title}"
+    # Prefer putting the company name into title columns that are labeled like
+    # "Company" and the role title into title columns labeled like "Role".
+    # If the database title is generic, fall back to a combined display value.
+    if title_is_company_like:
+        title_value = job.company or job.title
     elif title_is_role_like:
         title_value = job.title
+    else:
+        title_value = f"{job.company} — {job.title}" if job.company else job.title
     page_props[mapping.title] = prop_value(title_type, title_value)
 
     field_values = [
