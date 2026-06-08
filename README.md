@@ -4,7 +4,8 @@ Daily GitHub Action scraper for internship and new-grad SWE roles.
 
 ## What it does
 
-- polls public ATS boards (default: Greenhouse)
+- polls curated GitHub internship / new-grad repositories by default
+- also supports public ATS sources if you pass them in manually
 - filters for internship / new-grad roles
 - keeps only SWE-like titles by default
 - writes results to:
@@ -73,5 +74,5 @@ You can override the search terms through `workflow_dispatch` inputs:
 
 ## Extending it
 
-Edit `DEFAULT_SOURCES` in `scraper.py` to add more company boards.
-If you want broader results, pass custom role terms through the workflow inputs.
+Edit `DEFAULT_SOURCES` in `scraper.py` to add more GitHub repos or ATS boards.
+If you want broader results, pass custom source / role / cycle terms through the workflow inputs.

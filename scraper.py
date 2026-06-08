@@ -13,6 +13,7 @@ without changing the code.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -23,33 +24,24 @@ from pathlib import Path
 from typing import Iterable, Mapping
 
 import requests
+from bs4 import BeautifulSoup
 
 
 DEFAULT_SOURCES = [
     {
-        "name": "airbnb",
-        "provider": "greenhouse",
-        "url": "https://boards-api.greenhouse.io/v1/boards/airbnb/jobs?content=true",
+        "name": "simplify-summer-2026",
+        "provider": "github_readme",
+        "repo": "SimplifyJobs/Summer2026-Internships",
     },
     {
-        "name": "stripe",
-        "provider": "greenhouse",
-        "url": "https://boards-api.greenhouse.io/v1/boards/stripe/jobs?content=true",
+        "name": "simplify-new-grad-positions",
+        "provider": "github_readme",
+        "repo": "SimplifyJobs/New-Grad-Positions",
     },
     {
-        "name": "figma",
-        "provider": "greenhouse",
-        "url": "https://boards-api.greenhouse.io/v1/boards/figma/jobs?content=true",
-    },
-    {
-        "name": "datadog",
-        "provider": "greenhouse",
-        "url": "https://boards-api.greenhouse.io/v1/boards/datadog/jobs?content=true",
-    },
-    {
-        "name": "pinterest",
-        "provider": "greenhouse",
-        "url": "https://boards-api.greenhouse.io/v1/boards/pinterest/jobs?content=true",
+        "name": "vansh-summer-2027",
+        "provider": "github_readme",
+        "repo": "vanshb03/Summer2027-Internships",
     },
 ]
 
@@ -81,12 +73,16 @@ DEFAULT_CYCLE_TERMS = [
     "graduate",
     "entry level",
     "new college grad",
+    "co-op",
+    "coop",
 ]
 
 USER_AGENT = (
     "job-scraper/1.0 (+https://github.com/kyler505/job-scraper) "
     "requests"
 )
+
+GITHUB_API_BASE = "https://api.github.com"
 
 NOTION_API_VERSION = "2022-06-28"
 NOTION_DEFAULT_STATUS = os.getenv("NOTION_STATUS_VALUE", "")
@@ -182,6 +178,250 @@ def match_score(text: str, title: str, role_terms: list[re.Pattern], cycle_terms
     return score
 
 
+def github_headers() -> dict[str, str]:
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": USER_AGENT,
+    }
+    token = os.getenv("GITHUB_TOKEN", "").strip() or os.getenv("GH_TOKEN", "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def github_api_get(session: requests.Session, path: str) -> dict:
+    response = session.get(f"{GITHUB_API_BASE}{path}", headers=github_headers(), timeout=30)
+    response.raise_for_status()
+    return response.json()
+
+
+def source_label(source: dict) -> str:
+    return source.get("repo") or source.get("name") or source.get("url") or "unknown-source"
+
+
+def clean_text(value: str) -> str:
+    value = re.sub(r"\s+", " ", (value or "").replace("\u00a0", " ")).strip()
+    value = re.sub(r"^[^\w\d]+", "", value).strip()
+    return value
+
+
+def html_to_text(value: str) -> str:
+    if not value:
+        return ""
+    if "<" in value and ">" in value:
+        value = BeautifulSoup(value, "html.parser").get_text(" • ", strip=True)
+    return clean_text(value)
+
+
+def extract_first_url(value: str) -> str:
+    if not value:
+        return ""
+    if "<a" in value.lower():
+        soup = BeautifulSoup(value, "html.parser")
+        link = soup.find("a", href=True)
+        if link and link.get("href"):
+            return link["href"].strip()
+    md_link = re.search(r"\[[^\]]+\]\(([^)]+)\)", value)
+    if md_link:
+        return md_link.group(1).strip()
+    href_link = re.search(r'href=["\']([^"\']+)["\']', value, re.I)
+    if href_link:
+        return href_link.group(1).strip()
+    raw_url = re.search("https?://[^\\s<>\"]+", value)
+    if raw_url:
+        return raw_url.group(0).strip()
+    return ""
+
+
+def split_markdown_row(row: str) -> list[str]:
+    row = row.strip().strip("|")
+    return [part.strip() for part in row.split("|")]
+
+
+def is_markdown_table_separator(row: str) -> bool:
+    row = row.strip()
+    if "-" not in row:
+        return False
+    return bool(re.fullmatch(r"\|?[\s:\-]+(?:\|[\s:\-]+)+\|?", row))
+
+
+def is_markdown_table_row(row: str) -> bool:
+    return "|" in row and not row.lstrip().startswith("<")
+
+
+def parse_date_value(value: str | None) -> str | None:
+    if not value:
+        return None
+    text = value.strip()
+    for fmt in (
+        "%Y-%m-%d",
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%dT%H:%M:%S",
+        "%B %d, %Y",
+        "%b %d, %Y",
+        "%Y/%m/%d",
+    ):
+        try:
+            return datetime.strptime(text, fmt).date().isoformat()
+        except ValueError:
+            pass
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date().isoformat()
+    except ValueError:
+        return None
+
+
+def parse_table_schema(headers: list[str]) -> dict[str, int | None]:
+    normalized = [normalize(header) for header in headers]
+
+    def pick(*needles: str) -> int | None:
+        for idx, header in enumerate(normalized):
+            if any(needle in header for needle in needles):
+                return idx
+        return None
+
+    return {
+        "company": pick("company", "employer", "organization"),
+        "title": pick("role", "title", "job"),
+        "location": pick("location", "city", "region", "office"),
+        "url": pick("application", "apply", "link", "url", "job"),
+        "updated_at": pick("age", "date", "posted", "added", "updated"),
+    }
+
+
+def build_raw_job(company: str, title: str, location: str, url: str, updated_at: str | None, source: dict, text: str) -> dict:
+    source_name = source_label(source)
+    return {
+        "company": company,
+        "title": title,
+        "location": location,
+        "url": url,
+        "updated_at": updated_at,
+        "source": source_name,
+        "text": text,
+    }
+
+
+def fetch_github_repo_jobs(session: requests.Session, source: dict) -> list[dict]:
+    repo = source.get("repo", "").strip()
+    if not repo:
+        raise ValueError("GitHub source is missing repo")
+    readme_path = source.get("path", "").strip()
+    if readme_path:
+        data = github_api_get(session, f"/repos/{repo}/contents/{readme_path}")
+    else:
+        data = github_api_get(session, f"/repos/{repo}/readme")
+
+    content = data.get("content", "")
+    if data.get("encoding", "base64") == "base64":
+        readme = base64.b64decode(content).decode("utf-8", errors="replace")
+    else:
+        readme = content
+
+    source_url = data.get("html_url") or f"https://github.com/{repo}"
+    source_text = f"{repo} {source_url}"
+    jobs: list[dict] = []
+
+    soup = BeautifulSoup(readme, "html.parser")
+    for table in soup.find_all("table"):
+        headers = [html_to_text(th.get_text(" ", strip=True)) for th in table.find_all("th")]
+        schema = parse_table_schema(headers)
+        prev_company = ""
+        for tr in table.find_all("tr"):
+            cells = tr.find_all(["td", "th"], recursive=False)
+            if not cells or all(cell.name == "th" for cell in cells):
+                continue
+            cell_texts = [html_to_text(cell.get_text(" • ", strip=True)) for cell in cells]
+
+            def get_cell(idx: int | None) -> str:
+                if idx is None or idx >= len(cell_texts):
+                    return ""
+                return cell_texts[idx]
+
+            company = get_cell(schema["company"])
+            if not company or company == "↳":
+                company = prev_company
+            else:
+                prev_company = company
+
+            title = get_cell(schema["title"])
+            location = get_cell(schema["location"])
+            updated_at = get_cell(schema["updated_at"]) or None
+
+            url = ""
+            url_idx = schema["url"]
+            if url_idx is not None and url_idx < len(cells):
+                url = extract_first_url(cells[url_idx].decode_contents()) or extract_first_url(cell_texts[url_idx])
+            if not url and schema["title"] is not None and schema["title"] < len(cells):
+                url = extract_first_url(cells[schema["title"]].decode_contents()) or extract_first_url(cell_texts[schema["title"]])
+            if not url:
+                for cell in cells:
+                    url = extract_first_url(cell.decode_contents())
+                    if url:
+                        break
+
+            if not company or not title or not url:
+                continue
+
+            text = " ".join(part for part in [source_text, company, title, location, updated_at or ""] if part)
+            jobs.append(build_raw_job(company, title, location, url, updated_at, source, text))
+
+    lines = readme.splitlines()
+    i = 0
+    prev_company = ""
+    while i < len(lines) - 1:
+        header_line = lines[i].rstrip()
+        sep_line = lines[i + 1].rstrip()
+        if is_markdown_table_row(header_line) and is_markdown_table_separator(sep_line):
+            headers = [html_to_text(cell) for cell in split_markdown_row(header_line)]
+            schema = parse_table_schema(headers)
+            j = i + 2
+            while j < len(lines) and is_markdown_table_row(lines[j].rstrip()):
+                row = lines[j].rstrip()
+                cells = [html_to_text(cell) for cell in split_markdown_row(row)]
+                if not cells:
+                    j += 1
+                    continue
+
+                def get_cell(idx: int | None) -> str:
+                    if idx is None or idx >= len(cells):
+                        return ""
+                    return cells[idx]
+
+                company = get_cell(schema["company"])
+                if not company or company == "↳":
+                    company = prev_company
+                else:
+                    prev_company = company
+
+                title = get_cell(schema["title"])
+                location = get_cell(schema["location"])
+                updated_at = get_cell(schema["updated_at"]) or None
+
+                url = ""
+                url_idx = schema["url"]
+                if url_idx is not None and url_idx < len(cells):
+                    url = extract_first_url(split_markdown_row(row)[url_idx])
+                if not url and schema["title"] is not None and schema["title"] < len(cells):
+                    url = extract_first_url(split_markdown_row(row)[schema["title"]])
+                if not url:
+                    for cell in split_markdown_row(row):
+                        url = extract_first_url(cell)
+                        if url:
+                            break
+
+                if company and title and url:
+                    text = " ".join(part for part in [source_text, company, title, location, updated_at or ""] if part)
+                    jobs.append(build_raw_job(company, title, location, url, updated_at, source, text))
+                j += 1
+            i = j
+            continue
+        i += 1
+
+    return jobs
+
+
 def fetch_greenhouse_board(session: requests.Session, source: dict) -> list[dict]:
     response = session.get(source["url"], timeout=30)
     response.raise_for_status()
@@ -196,31 +436,28 @@ def fetch_greenhouse_board(session: requests.Session, source: dict) -> list[dict
         content = job.get("content") or ""
         updated_at = job.get("updated_at")
         text = " ".join([company, title, location, content])
-        out.append(
-            {
-                "company": company,
-                "title": title,
-                "location": location,
-                "url": url,
-                "updated_at": updated_at,
-                "source": source["url"],
-                "text": text,
-            }
-        )
+        out.append(build_raw_job(company, title, location, url, updated_at, source, text))
     return out
 
 
 def fetch_sources(session: requests.Session, sources: list[dict]) -> list[dict]:
     jobs: list[dict] = []
     for source in sources:
-        provider = source.get("provider", "greenhouse")
-        if provider != "greenhouse":
+        provider = source.get("provider")
+        if not provider:
+            provider = "github_readme" if source.get("repo") else "greenhouse" if source.get("url") else ""
+        if provider == "github_readme":
+            try:
+                jobs.extend(fetch_github_repo_jobs(session, source))
+            except Exception as exc:
+                print(f"[warn] Failed source {source.get('name') or source.get('repo')}: {exc}", file=sys.stderr)
+        elif provider == "greenhouse":
+            try:
+                jobs.extend(fetch_greenhouse_board(session, source))
+            except Exception as exc:
+                print(f"[warn] Failed source {source.get('name')}: {exc}", file=sys.stderr)
+        else:
             print(f"[warn] Skipping unsupported source provider: {provider}", file=sys.stderr)
-            continue
-        try:
-            jobs.extend(fetch_greenhouse_board(session, source))
-        except Exception as exc:
-            print(f"[warn] Failed source {source.get('name')}: {exc}", file=sys.stderr)
     return jobs
 
 
@@ -473,7 +710,9 @@ def build_notion_page_properties(job: Job, schema: dict, mapping: PropertyMappin
             continue
         prop_type = properties[prop_name]["type"]
         if field_name == "updated_at" and prop_type == "date":
-            page_props[prop_name] = prop_value(prop_type, field_value)
+            parsed_date = parse_date_value(str(field_value))
+            if parsed_date:
+                page_props[prop_name] = prop_value(prop_type, parsed_date)
         elif field_name == "scraped_at" and prop_type == "date":
             page_props[prop_name] = prop_value(prop_type, field_value)
         elif field_name == "score" and prop_type == "number":

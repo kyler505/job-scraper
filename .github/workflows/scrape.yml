@@ -29,6 +29,7 @@ jobs:
       NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
       NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
       NOTION_SYNC: 'true'
+      GITHUB_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
