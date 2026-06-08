@@ -426,7 +426,10 @@ def build_notion_page_properties(job: Job, schema: dict, mapping: PropertyMappin
         )
 
     title_type = properties[mapping.title]["type"]
-    page_props[mapping.title] = prop_value(title_type, job.title)
+    title_value = job.title
+    if mapping.company and mapping.company == mapping.title:
+        title_value = f"{job.company} — {job.title}"
+    page_props[mapping.title] = prop_value(title_type, title_value)
 
     field_values = [
         ("company", job.company),
@@ -441,6 +444,8 @@ def build_notion_page_properties(job: Job, schema: dict, mapping: PropertyMappin
             continue
         prop_name = getattr(mapping, field_name)
         if not prop_name or prop_name not in properties:
+            continue
+        if field_name == "company" and prop_name == mapping.title:
             continue
         prop_type = properties[prop_name]["type"]
         if field_name == "updated_at" and prop_type == "date":
