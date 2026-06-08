@@ -35,14 +35,29 @@ The workflow reads these GitHub Actions secrets:
 The script auto-detects the Notion database columns by name and type. If your database uses different column names, you can override them with environment variables:
 
 - `NOTION_TITLE_PROPERTY`
+- `NOTION_ROLE_PROPERTY`
 - `NOTION_COMPANY_PROPERTY`
 - `NOTION_LOCATION_PROPERTY`
 - `NOTION_URL_PROPERTY`
 - `NOTION_SCORE_PROPERTY`
 - `NOTION_UPDATED_AT_PROPERTY`
+- `NOTION_SCRAPED_AT_PROPERTY`
 - `NOTION_SOURCE_PROPERTY`
 - `NOTION_STATUS_PROPERTY`
 - `NOTION_STATUS_VALUE`
+
+The sync now prefers semantically named fields and avoids guessing `score` into any random number column or `updated_at` into a generic date field. If a matching column exists, it will populate:
+
+- title/display field
+- role/title field
+- company
+- location
+- link/url
+- match score
+- ATS updated date
+- scraped/found date
+- source board/url
+- status
 
 The sync is idempotent when a URL property is available; otherwise it falls back to title/company matching.
 

@@ -93,11 +93,13 @@ NOTION_DEFAULT_STATUS = os.getenv("NOTION_STATUS_VALUE", "")
 NOTION_SOURCE_LABEL = os.getenv("NOTION_SOURCE_LABEL", "job-scraper")
 
 TITLE_CANDIDATES = ["name", "title", "job", "role", "position"]
+ROLE_CANDIDATES = ["role", "position", "job title", "opening", "title"]
 COMPANY_CANDIDATES = ["company", "employer", "organization", "org", "company name"]
 LOCATION_CANDIDATES = ["location", "city", "region", "office"]
 URL_CANDIDATES = ["url", "link", "job url", "application url", "source url", "website"]
 SCORE_CANDIDATES = ["score", "rank", "priority"]
-UPDATED_CANDIDATES = ["updated at", "updated", "last updated", "scraped at", "date"]
+UPDATED_CANDIDATES = ["updated at", "updated", "last updated", "posted at", "posted", "published at"]
+SCRAPED_AT_CANDIDATES = ["scraped at", "found at", "discovered at", "seen at"]
 SOURCE_CANDIDATES = ["source", "source board", "board", "origin"]
 STATUS_CANDIDATES = ["status", "stage", "application status"]
 
@@ -119,11 +121,13 @@ class Job:
 @dataclass(frozen=True)
 class PropertyMapping:
     title: str | None = None
+    role: str | None = None
     company: str | None = None
     location: str | None = None
     url: str | None = None
     score: str | None = None
     updated_at: str | None = None
+    scraped_at: str | None = None
     source: str | None = None
     status: str | None = None
 
@@ -353,7 +357,12 @@ def get_database_schema(session: requests.Session, token: str, database_id: str)
     return notion_api(session, token, "GET", f"/databases/{database_id}")
 
 
-def find_property_name(properties: dict, candidates: list[str], type_name: str | None = None) -> str | None:
+def find_property_name(
+    properties: dict,
+    candidates: list[str],
+    type_name: str | None = None,
+    allow_type_fallback: bool = True,
+) -> str | None:
     normalized_candidates = [normalize(candidate) for candidate in candidates]
 
     def matches(name: str) -> bool:
@@ -366,7 +375,7 @@ def find_property_name(properties: dict, candidates: list[str], type_name: str |
             return name
 
     # Type fallback if no name match was found
-    if type_name is not None:
+    if allow_type_fallback and type_name is not None:
         for name, prop in properties.items():
             if prop.get("type") == type_name:
                 return name
@@ -375,21 +384,28 @@ def find_property_name(properties: dict, candidates: list[str], type_name: str |
 
 
 def detect_property_mapping(properties: dict, env: Mapping[str, str]) -> PropertyMapping:
-    def explicit_or_detect(env_key: str, candidates: list[str], type_name: str | None = None) -> str | None:
+    def explicit_or_detect(
+        env_key: str,
+        candidates: list[str],
+        type_name: str | None = None,
+        allow_type_fallback: bool = True,
+    ) -> str | None:
         explicit = env.get(env_key, "").strip()
         if explicit:
             return explicit if explicit in properties else None
-        return find_property_name(properties, candidates, type_name=type_name)
+        return find_property_name(properties, candidates, type_name=type_name, allow_type_fallback=allow_type_fallback)
 
     return PropertyMapping(
         title=explicit_or_detect("NOTION_TITLE_PROPERTY", TITLE_CANDIDATES, type_name="title"),
-        company=explicit_or_detect("NOTION_COMPANY_PROPERTY", COMPANY_CANDIDATES),
-        location=explicit_or_detect("NOTION_LOCATION_PROPERTY", LOCATION_CANDIDATES),
-        url=explicit_or_detect("NOTION_URL_PROPERTY", URL_CANDIDATES),
-        score=explicit_or_detect("NOTION_SCORE_PROPERTY", SCORE_CANDIDATES, type_name="number"),
-        updated_at=explicit_or_detect("NOTION_UPDATED_AT_PROPERTY", UPDATED_CANDIDATES),
-        source=explicit_or_detect("NOTION_SOURCE_PROPERTY", SOURCE_CANDIDATES),
-        status=explicit_or_detect("NOTION_STATUS_PROPERTY", STATUS_CANDIDATES),
+        role=explicit_or_detect("NOTION_ROLE_PROPERTY", ROLE_CANDIDATES, type_name="rich_text"),
+        company=explicit_or_detect("NOTION_COMPANY_PROPERTY", COMPANY_CANDIDATES, type_name="rich_text"),
+        location=explicit_or_detect("NOTION_LOCATION_PROPERTY", LOCATION_CANDIDATES, type_name="rich_text"),
+        url=explicit_or_detect("NOTION_URL_PROPERTY", URL_CANDIDATES, type_name="url"),
+        score=explicit_or_detect("NOTION_SCORE_PROPERTY", SCORE_CANDIDATES, type_name="number", allow_type_fallback=False),
+        updated_at=explicit_or_detect("NOTION_UPDATED_AT_PROPERTY", UPDATED_CANDIDATES, type_name="date", allow_type_fallback=False),
+        scraped_at=explicit_or_detect("NOTION_SCRAPED_AT_PROPERTY", SCRAPED_AT_CANDIDATES, type_name="date", allow_type_fallback=False),
+        source=explicit_or_detect("NOTION_SOURCE_PROPERTY", SOURCE_CANDIDATES, type_name="rich_text"),
+        status=explicit_or_detect("NOTION_STATUS_PROPERTY", STATUS_CANDIDATES, type_name="status"),
     )
 
 
@@ -426,17 +442,25 @@ def build_notion_page_properties(job: Job, schema: dict, mapping: PropertyMappin
         )
 
     title_type = properties[mapping.title]["type"]
+    title_name_norm = normalize(mapping.title)
+    title_is_company_like = any(candidate in title_name_norm for candidate in [normalize(c) for c in COMPANY_CANDIDATES])
+    title_is_role_like = any(candidate in title_name_norm for candidate in [normalize(c) for c in ROLE_CANDIDATES])
+
     title_value = job.title
-    if mapping.company and mapping.company == mapping.title:
+    if title_is_company_like and mapping.company:
         title_value = f"{job.company} — {job.title}"
+    elif title_is_role_like:
+        title_value = job.title
     page_props[mapping.title] = prop_value(title_type, title_value)
 
     field_values = [
+        ("role", job.title),
         ("company", job.company),
         ("location", job.location),
         ("url", job.url),
         ("score", job.score),
         ("updated_at", job.updated_at),
+        ("scraped_at", datetime.now(timezone.utc).isoformat()),
         ("source", job.source),
     ]
     for field_name, field_value in field_values:
@@ -445,10 +469,12 @@ def build_notion_page_properties(job: Job, schema: dict, mapping: PropertyMappin
         prop_name = getattr(mapping, field_name)
         if not prop_name or prop_name not in properties:
             continue
-        if field_name == "company" and prop_name == mapping.title:
+        if field_name in {"company", "role"} and prop_name == mapping.title:
             continue
         prop_type = properties[prop_name]["type"]
         if field_name == "updated_at" and prop_type == "date":
+            page_props[prop_name] = prop_value(prop_type, field_value)
+        elif field_name == "scraped_at" and prop_type == "date":
             page_props[prop_name] = prop_value(prop_type, field_value)
         elif field_name == "score" and prop_type == "number":
             page_props[prop_name] = prop_value(prop_type, field_value)
@@ -506,9 +532,9 @@ def sync_jobs_to_notion(jobs: list[Job]) -> None:
 
     print(
         "Notion mapping: "
-        f"title={mapping.title or '-'} company={mapping.company or '-'} location={mapping.location or '-'} "
+        f"title={mapping.title or '-'} role={mapping.role or '-'} company={mapping.company or '-'} location={mapping.location or '-'} "
         f"url={mapping.url or '-'} score={mapping.score or '-'} updated_at={mapping.updated_at or '-'} "
-        f"source={mapping.source or '-'} status={mapping.status or '-'}"
+        f"scraped_at={mapping.scraped_at or '-'} source={mapping.source or '-'} status={mapping.status or '-'}"
     )
 
     created = 0
