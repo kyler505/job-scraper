@@ -397,15 +397,15 @@ def detect_property_mapping(properties: dict, env: Mapping[str, str]) -> Propert
 
     return PropertyMapping(
         title=explicit_or_detect("NOTION_TITLE_PROPERTY", TITLE_CANDIDATES, type_name="title"),
-        role=explicit_or_detect("NOTION_ROLE_PROPERTY", ROLE_CANDIDATES, type_name="rich_text"),
-        company=explicit_or_detect("NOTION_COMPANY_PROPERTY", COMPANY_CANDIDATES, type_name="rich_text"),
-        location=explicit_or_detect("NOTION_LOCATION_PROPERTY", LOCATION_CANDIDATES, type_name="rich_text"),
-        url=explicit_or_detect("NOTION_URL_PROPERTY", URL_CANDIDATES, type_name="url"),
+        role=explicit_or_detect("NOTION_ROLE_PROPERTY", ROLE_CANDIDATES, type_name="rich_text", allow_type_fallback=False),
+        company=explicit_or_detect("NOTION_COMPANY_PROPERTY", COMPANY_CANDIDATES, type_name="rich_text", allow_type_fallback=False),
+        location=explicit_or_detect("NOTION_LOCATION_PROPERTY", LOCATION_CANDIDATES, type_name="rich_text", allow_type_fallback=False),
+        url=explicit_or_detect("NOTION_URL_PROPERTY", URL_CANDIDATES, type_name="url", allow_type_fallback=False),
         score=explicit_or_detect("NOTION_SCORE_PROPERTY", SCORE_CANDIDATES, type_name="number", allow_type_fallback=False),
         updated_at=explicit_or_detect("NOTION_UPDATED_AT_PROPERTY", UPDATED_CANDIDATES, type_name="date", allow_type_fallback=False),
         scraped_at=explicit_or_detect("NOTION_SCRAPED_AT_PROPERTY", SCRAPED_AT_CANDIDATES, type_name="date", allow_type_fallback=False),
-        source=explicit_or_detect("NOTION_SOURCE_PROPERTY", SOURCE_CANDIDATES, type_name="rich_text"),
-        status=explicit_or_detect("NOTION_STATUS_PROPERTY", STATUS_CANDIDATES, type_name="status"),
+        source=explicit_or_detect("NOTION_SOURCE_PROPERTY", SOURCE_CANDIDATES, type_name="rich_text", allow_type_fallback=False),
+        status=explicit_or_detect("NOTION_STATUS_PROPERTY", STATUS_CANDIDATES, type_name="status", allow_type_fallback=False),
     )
 
 
