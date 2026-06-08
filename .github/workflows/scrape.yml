@@ -4,10 +4,32 @@ on:
   schedule:
     - cron: '0 13 * * *'
   workflow_dispatch:
+    inputs:
+      max_results:
+        description: 'Maximum number of matches to keep'
+        required: false
+        default: '100'
+      sources_json:
+        description: 'Optional JSON array of source objects overriding defaults'
+        required: false
+        default: ''
+      role_terms_json:
+        description: 'Optional JSON array of role keywords'
+        required: false
+        default: ''
+      cycle_terms_json:
+        description: 'Optional JSON array of internship/new-grad keywords'
+        required: false
+        default: ''
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
+    env:
+      NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+      NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+      NOTION_SYNC: 'true'
+      GITHUB_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -23,7 +45,16 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run scraper
-        run: python scraper.py
+        run: |
+          python scraper.py --max-results "${{ github.event.inputs.max_results || '100' }}"
         env:
-          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          SOURCES_JSON: ${{ github.event.inputs.sources_json }}
+          ROLE_TERMS_JSON: ${{ github.event.inputs.role_terms_json }}
+          CYCLE_TERMS_JSON: ${{ github.event.inputs.cycle_terms_json }}
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: job-scrape-results
+          path: outputs/
+          if-no-files-found: error
