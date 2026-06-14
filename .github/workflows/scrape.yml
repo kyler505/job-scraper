@@ -15,7 +15,7 @@ jobs:
       - name: Checkout jb vault
         uses: actions/checkout@v4
         with:
-          repository: kcao-gss/jb
+          repository: kyler505/jb
           token: ${{ secrets.JB_REPO_TOKEN }}
           path: jb
 
