@@ -32,6 +32,27 @@ def unix_to_date(ts):
     return datetime.date.fromtimestamp(ts).isoformat()
 
 
+_DISCIPLINE_RULES = [
+    ("ml",       ["machine learning", "ml engineer", "deep learning", "nlp", "computer vision", "ai engineer", "ai/ml"]),
+    ("data",     ["data engineer", "data analyst", "data scien", "analytics", "business intelligence"]),
+    ("devops",   ["devops", "site reliability", "platform engineer", "infrastructure", "cloud engineer", " sre "]),
+    ("security", ["security", "appsec", "infosec", "cryptograph"]),
+    ("hardware", ["hardware", "embedded", "firmware", "fpga", "asic", "electrical engineer"]),
+    ("mobile",   ["mobile", "ios engineer", "android engineer"]),
+    ("frontend", ["frontend", "front-end", "front end", "ui engineer", "web develop"]),
+    ("backend",  ["backend", "back-end", "back end"]),
+    ("swe",      ["software eng", "software develop", "swe", "full stack", "fullstack", "programmer", "developer"]),
+]
+
+
+def classify_discipline(title):
+    t = title.lower()
+    for bucket, keywords in _DISCIPLINE_RULES:
+        if any(k in t for k in keywords):
+            return bucket
+    return "other"
+
+
 def parse_note(path):
     """Return (frontmatter_dict, body_str) or (None, '') if not parseable."""
     try:
@@ -62,6 +83,7 @@ def write_note(path, listing, category, source, existing_fm=None, existing_body=
         "company": listing["company_name"],
         "role": listing["title"],
         "category": category,
+        "discipline": classify_discipline(listing["title"]),
         "locations": listing.get("locations", []),
         "terms": listing.get("terms", []),
         "url": listing.get("url", ""),
