@@ -18,7 +18,11 @@ FEEDS = [
 ]
 
 # Fields the user owns — preserved across every re-scrape
-USER_FIELDS = {"status", "applied_date", "deadline", "notes"}
+USER_FIELDS = {
+    "status", "applied_date", "deadline", "notes",
+    "apply_method", "apply_result", "apply_error",
+    "confirmation", "resume_used", "needs_review", "priority",
+}
 
 
 def sanitize_filename(name):
@@ -98,6 +102,11 @@ def write_note(path, listing, category, source, existing_fm=None, existing_body=
         "deadline": user_vals.get("deadline"),
         "notes": user_vals.get("notes"),
     }
+
+    # Preserve remaining user-owned fields (pipeline write-back fields + priority)
+    for f in USER_FIELDS:
+        if f not in fm and f in user_vals:
+            fm[f] = user_vals[f]
 
     fm_str = yaml.dump(fm, default_flow_style=False, allow_unicode=True, sort_keys=False)
     note = f"---\n{fm_str}---\n"
