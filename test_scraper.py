@@ -1,68 +1,27 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from scraper import (
     Job,
-    PropertyMapping,
     build_discovery_notes,
-    build_notion_page_properties,
     build_search_matrix,
     canonicalize_url,
     filter_jobs,
+    parse_args,
     parse_frontmatter,
     sync_jobs_to_vault,
     write_outputs,
 )
 
 
-class BuildNotionPagePropertiesTests(unittest.TestCase):
-    def test_company_labeled_title_gets_company_name(self):
-        job = Job(
-            company="OpenAI",
-            title="Software Engineer Intern",
-            location="San Francisco, CA",
-            url="https://example.com/job",
-            updated_at=None,
-            source="source-board",
-            score=42,
-        )
-        schema = {
-            "properties": {
-                "Company": {"type": "title"},
-                "Role": {"type": "rich_text"},
-                "Location": {"type": "rich_text"},
-                "Link": {"type": "url"},
-            }
-        }
-        mapping = PropertyMapping(title="Company", role="Role", location="Location", url="Link")
-
-        props = build_notion_page_properties(job, schema, mapping)
-
-        self.assertEqual(props["Company"]["title"][0]["text"]["content"], "OpenAI")
-        self.assertEqual(props["Role"]["rich_text"][0]["text"]["content"], "Software Engineer Intern")
-
-    def test_generic_title_falls_back_to_company_and_role(self):
-        job = Job(
-            company="OpenAI",
-            title="Software Engineer Intern",
-            location="San Francisco, CA",
-            url="https://example.com/job",
-            updated_at=None,
-            source="source-board",
-            score=42,
-        )
-        schema = {
-            "properties": {
-                "Job": {"type": "title"},
-                "Role": {"type": "rich_text"},
-            }
-        }
-        mapping = PropertyMapping(title="Job", role="Role")
-
-        props = build_notion_page_properties(job, schema, mapping)
-
-        self.assertEqual(props["Job"]["title"][0]["text"]["content"], "OpenAI — Software Engineer Intern")
+class CliTests(unittest.TestCase):
+    def test_notion_flag_is_no_longer_supported(self):
+        with patch("sys.argv", ["scraper.py", "--no-notion-sync"]):
+            with self.assertRaises(SystemExit) as exc:
+                parse_args()
+        self.assertNotEqual(exc.exception.code, 0)
 
 
 class DiscoveryNotesTests(unittest.TestCase):

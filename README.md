@@ -12,58 +12,33 @@ Daily GitHub Action scraper for internship and new-grad SWE roles.
   - `outputs/jobs.json`
   - `outputs/jobs.md`
   - `outputs/discovery.md`
-- syncs the filtered listings into the `kyler505/jb` Obsidian vault when `JB_VAULT_DIR` points at a checked-out vault
-- still supports optional Notion sync when `NOTION_TOKEN` and `NOTION_DATABASE_ID` are available
+- syncs filtered listings into the `kyler505/jb` Obsidian vault when `JB_VAULT_DIR` points at a checked-out vault
 - can post a run summary to Discord when a Discord webhook or bot token is configured
 
 ## Local test
 
 ```bash
 python -m pip install -r requirements.txt
+python scraper.py --max-results 50 --vault-dir /path/to/jb
+```
+
+If you only want the scrape outputs and do not want to touch the vault:
+
+```bash
 python scraper.py --max-results 50
 ```
 
-To skip Notion sync locally:
+## Vault sync
 
-```bash
-python scraper.py --max-results 50 --no-notion-sync
-```
+Required for vault sync:
 
-## Notion sync
+- `JB_VAULT_DIR`
 
-The workflow reads these GitHub Actions secrets:
+Optional behavior:
 
-- `NOTION_TOKEN`
-- `NOTION_DATABASE_ID`
+- `JB_DEACTIVATE_MISSING=true` to mark unmatched existing vault notes as `active: false`
 
-The script auto-detects the Notion database columns by name and type. If your database uses different column names, you can override them with environment variables:
-
-- `NOTION_TITLE_PROPERTY`
-- `NOTION_ROLE_PROPERTY`
-- `NOTION_COMPANY_PROPERTY`
-- `NOTION_LOCATION_PROPERTY`
-- `NOTION_URL_PROPERTY`
-- `NOTION_SCORE_PROPERTY`
-- `NOTION_UPDATED_AT_PROPERTY`
-- `NOTION_SCRAPED_AT_PROPERTY`
-- `NOTION_SOURCE_PROPERTY`
-- `NOTION_STATUS_PROPERTY`
-- `NOTION_STATUS_VALUE`
-
-The sync now prefers semantically named fields and avoids guessing `score` into any random number column or `updated_at` into a generic date field. If a matching column exists, it will populate:
-
-- title/display field
-- role/title field
-- company
-- location
-- link/url
-- match score
-- ATS updated date
-- scraped/found date
-- source board/url
-- status
-
-The sync is idempotent when a URL property is available; otherwise it falls back to title/company matching.
+By default, deactivation is off to avoid mass churn when source coverage changes.
 
 ## Discord notifications
 

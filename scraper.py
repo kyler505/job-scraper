@@ -3,8 +3,8 @@
 
 This script polls public ATS endpoints (default: Greenhouse boards APIs),
 filters for internship / new-grad / SWE-related roles, deduplicates the
-results, writes a JSON + Markdown summary, and optionally syncs the matches
-into a Notion database.
+results, writes a JSON + Markdown summary, and syncs the matches into the
+jb Obsidian vault when configured.
 
 It is intentionally configurable so you can swap in your own company boards
 without changing the code.
@@ -22,7 +22,7 @@ import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import requests
@@ -166,21 +166,6 @@ USER_AGENT = (
 
 GITHUB_API_BASE = "https://api.github.com"
 
-NOTION_API_VERSION = "2022-06-28"
-NOTION_DEFAULT_STATUS = os.getenv("NOTION_STATUS_VALUE", "")
-NOTION_SOURCE_LABEL = os.getenv("NOTION_SOURCE_LABEL", "job-scraper")
-
-TITLE_CANDIDATES = ["name", "title", "job", "role", "position"]
-ROLE_CANDIDATES = ["role", "position", "job title", "opening", "title"]
-COMPANY_CANDIDATES = ["company", "employer", "organization", "org", "company name"]
-LOCATION_CANDIDATES = ["location", "city", "region", "office"]
-URL_CANDIDATES = ["url", "link", "job url", "application url", "source url", "website"]
-SCORE_CANDIDATES = ["score", "rank", "priority"]
-UPDATED_CANDIDATES = ["updated at", "updated", "last updated", "posted at", "posted", "published at"]
-SCRAPED_AT_CANDIDATES = ["scraped at", "found at", "discovered at", "seen at"]
-SOURCE_CANDIDATES = ["source", "source board", "board", "origin"]
-STATUS_CANDIDATES = ["status", "stage", "application status"]
-
 
 @dataclass(frozen=True)
 class Job:
@@ -200,20 +185,6 @@ class Job:
 
     def key(self) -> tuple[str, str, str]:
         return (self.company.lower(), self.title.lower(), self.url.lower())
-
-
-@dataclass(frozen=True)
-class PropertyMapping:
-    title: str | None = None
-    role: str | None = None
-    company: str | None = None
-    location: str | None = None
-    url: str | None = None
-    score: str | None = None
-    updated_at: str | None = None
-    scraped_at: str | None = None
-    source: str | None = None
-    status: str | None = None
 
 
 def load_json_value(raw: str | None, default, label: str):
@@ -1044,261 +1015,7 @@ def parse_args() -> argparse.Namespace:
         default=int(os.getenv("MAX_RESULTS", "200")),
         help="Maximum number of jobs to emit after filtering.",
     )
-    parser.add_argument(
-        "--notion-sync",
-        action=argparse.BooleanOptionalAction,
-        default=env_truthy("NOTION_SYNC") if os.getenv("NOTION_SYNC") is not None else True,
-        help="Sync matches into Notion when NOTION_TOKEN and NOTION_DATABASE_ID are present.",
-    )
     return parser.parse_args()
-
-
-def notion_headers(token: str) -> dict[str, str]:
-    return {
-        "Authorization": f"Bearer {token}",
-        "Notion-Version": NOTION_API_VERSION,
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
-
-
-def notion_api(session: requests.Session, token: str, method: str, path: str, payload: dict | None = None) -> dict:
-    response = session.request(
-        method,
-        f"https://api.notion.com/v1{path}",
-        headers=notion_headers(token),
-        json=payload,
-        timeout=30,
-    )
-    if not response.ok:
-        raise RuntimeError(f"Notion API {method} {path} failed: {response.status_code} {response.text}")
-    return response.json() if response.content else {}
-
-
-def get_database_schema(session: requests.Session, token: str, database_id: str) -> dict:
-    return notion_api(session, token, "GET", f"/databases/{database_id}")
-
-
-def find_property_name(
-    properties: dict,
-    candidates: list[str],
-    type_name: str | None = None,
-    allow_type_fallback: bool = True,
-) -> str | None:
-    normalized_candidates = [normalize(candidate) for candidate in candidates]
-
-    def matches(name: str) -> bool:
-        name_norm = normalize(name)
-        return any(name_norm == candidate or candidate in name_norm or name_norm in candidate for candidate in normalized_candidates)
-
-    # Exact or fuzzy name match first
-    for name, prop in properties.items():
-        if matches(name) and (type_name is None or prop.get("type") == type_name):
-            return name
-
-    # Type fallback if no name match was found
-    if allow_type_fallback and type_name is not None:
-        for name, prop in properties.items():
-            if prop.get("type") == type_name:
-                return name
-
-    return None
-
-
-def detect_property_mapping(properties: dict, env: Mapping[str, str]) -> PropertyMapping:
-    def explicit_or_detect(
-        env_key: str,
-        candidates: list[str],
-        type_name: str | None = None,
-        allow_type_fallback: bool = True,
-    ) -> str | None:
-        explicit = env.get(env_key, "").strip()
-        if explicit:
-            return explicit if explicit in properties else None
-        return find_property_name(properties, candidates, type_name=type_name, allow_type_fallback=allow_type_fallback)
-
-    return PropertyMapping(
-        title=explicit_or_detect("NOTION_TITLE_PROPERTY", TITLE_CANDIDATES, type_name="title"),
-        role=explicit_or_detect("NOTION_ROLE_PROPERTY", ROLE_CANDIDATES, type_name="rich_text", allow_type_fallback=False),
-        company=explicit_or_detect("NOTION_COMPANY_PROPERTY", COMPANY_CANDIDATES, type_name="rich_text", allow_type_fallback=False),
-        location=explicit_or_detect("NOTION_LOCATION_PROPERTY", LOCATION_CANDIDATES, type_name="rich_text", allow_type_fallback=False),
-        url=explicit_or_detect("NOTION_URL_PROPERTY", URL_CANDIDATES, type_name="url", allow_type_fallback=False),
-        score=explicit_or_detect("NOTION_SCORE_PROPERTY", SCORE_CANDIDATES, type_name="number", allow_type_fallback=False),
-        updated_at=explicit_or_detect("NOTION_UPDATED_AT_PROPERTY", UPDATED_CANDIDATES, type_name="date", allow_type_fallback=False),
-        scraped_at=explicit_or_detect("NOTION_SCRAPED_AT_PROPERTY", SCRAPED_AT_CANDIDATES, type_name="date", allow_type_fallback=False),
-        source=explicit_or_detect("NOTION_SOURCE_PROPERTY", SOURCE_CANDIDATES, type_name="rich_text", allow_type_fallback=False),
-        status=explicit_or_detect("NOTION_STATUS_PROPERTY", STATUS_CANDIDATES, type_name="status", allow_type_fallback=False),
-    )
-
-
-def prop_value(prop_type: str, value) -> dict:
-    if prop_type == "title":
-        return {"title": [{"type": "text", "text": {"content": str(value)}}]}
-    if prop_type == "rich_text":
-        return {"rich_text": [{"type": "text", "text": {"content": str(value)}}]}
-    if prop_type == "url":
-        return {"url": str(value)}
-    if prop_type == "number":
-        return {"number": value}
-    if prop_type == "date":
-        return {"date": {"start": str(value)}}
-    if prop_type in {"select", "status"}:
-        return {prop_type: {"name": str(value)}}
-    if prop_type == "checkbox":
-        return {"checkbox": bool(value)}
-    if prop_type == "email":
-        return {"email": str(value)}
-    if prop_type == "phone_number":
-        return {"phone_number": str(value)}
-    return {}
-
-
-def build_notion_page_properties(job: Job, schema: dict, mapping: PropertyMapping) -> dict:
-    properties = schema.get("properties", {})
-    page_props: dict[str, dict] = {}
-
-    if not mapping.title or mapping.title not in properties:
-        raise RuntimeError(
-            "Could not find a title property in the Notion database. "
-            "Set NOTION_TITLE_PROPERTY to the correct column name."
-        )
-
-    title_type = properties[mapping.title]["type"]
-    title_name_norm = normalize(mapping.title)
-    title_is_company_like = any(candidate in title_name_norm for candidate in [normalize(c) for c in COMPANY_CANDIDATES])
-    title_is_role_like = any(candidate in title_name_norm for candidate in [normalize(c) for c in ROLE_CANDIDATES])
-
-    # Prefer putting the company name into title columns that are labeled like
-    # "Company" and the role title into title columns labeled like "Role".
-    # If the database title is generic, fall back to a combined display value.
-    if title_is_company_like:
-        title_value = job.company or job.title
-    elif title_is_role_like:
-        title_value = job.title
-    else:
-        title_value = f"{job.company} — {job.title}" if job.company else job.title
-    page_props[mapping.title] = prop_value(title_type, title_value)
-
-    field_values = [
-        ("role", job.title),
-        ("company", job.company),
-        ("location", job.location),
-        ("url", job.url),
-        ("score", job.score),
-        ("updated_at", job.updated_at),
-        ("scraped_at", datetime.now(timezone.utc).isoformat()),
-        ("source", job.source),
-    ]
-    for field_name, field_value in field_values:
-        if field_value in (None, ""):
-            continue
-        prop_name = getattr(mapping, field_name)
-        if not prop_name or prop_name not in properties:
-            continue
-        if field_name in {"company", "role"} and prop_name == mapping.title:
-            continue
-        prop_type = properties[prop_name]["type"]
-        if field_name == "updated_at" and prop_type == "date":
-            parsed_date = parse_date_value(str(field_value))
-            if parsed_date:
-                page_props[prop_name] = prop_value(prop_type, parsed_date)
-        elif field_name == "scraped_at" and prop_type == "date":
-            page_props[prop_name] = prop_value(prop_type, field_value)
-        elif field_name == "score" and prop_type == "number":
-            page_props[prop_name] = prop_value(prop_type, field_value)
-        elif prop_type in {"title", "rich_text", "url", "number", "date", "select", "status", "checkbox", "email", "phone_number"}:
-            page_props[prop_name] = prop_value(prop_type, field_value)
-
-    if mapping.status and mapping.status in properties and NOTION_DEFAULT_STATUS:
-        status_type = properties[mapping.status]["type"]
-        if status_type in {"select", "status"}:
-            page_props[mapping.status] = prop_value(status_type, NOTION_DEFAULT_STATUS)
-
-    return page_props
-
-
-def build_notion_dedupe_filter(job: Job, schema: dict, mapping: PropertyMapping) -> dict | None:
-    properties = schema.get("properties", {})
-    if mapping.url and mapping.url in properties:
-        prop_type = properties[mapping.url]["type"]
-        if prop_type in {"url", "rich_text", "title"}:
-            return {"property": mapping.url, prop_type: {"equals": job.url}}
-
-    clauses = []
-    if mapping.title and mapping.title in properties:
-        title_type = properties[mapping.title]["type"]
-        if title_type in {"title", "rich_text"}:
-            clauses.append({"property": mapping.title, title_type: {"equals": job.title}})
-    if mapping.company and mapping.company in properties:
-        company_type = properties[mapping.company]["type"]
-        if company_type in {"rich_text", "select", "status", "title"}:
-            clauses.append({"property": mapping.company, company_type: {"equals": job.company}})
-
-    if not clauses:
-        return None
-    if len(clauses) == 1:
-        return clauses[0]
-    return {"and": clauses}
-
-
-def query_existing_pages(session: requests.Session, token: str, database_id: str, filter_payload: dict) -> list[dict]:
-    payload = {"filter": filter_payload, "page_size": 10}
-    data = notion_api(session, token, "POST", f"/databases/{database_id}/query", payload)
-    return data.get("results", [])
-
-
-def sync_jobs_to_notion(jobs: list[Job]) -> None:
-    token = os.getenv("NOTION_TOKEN", "").strip()
-    database_id = os.getenv("NOTION_DATABASE_ID", "").strip()
-    if not token or not database_id:
-        print("Notion sync skipped: NOTION_TOKEN or NOTION_DATABASE_ID not set")
-        return
-
-    session = requests.Session()
-    schema = get_database_schema(session, token, database_id)
-    mapping = detect_property_mapping(schema.get("properties", {}), os.environ)
-
-    print(
-        "Notion mapping: "
-        f"title={mapping.title or '-'} role={mapping.role or '-'} company={mapping.company or '-'} location={mapping.location or '-'} "
-        f"url={mapping.url or '-'} score={mapping.score or '-'} updated_at={mapping.updated_at or '-'} "
-        f"scraped_at={mapping.scraped_at or '-'} source={mapping.source or '-'} status={mapping.status or '-'}"
-    )
-
-    created = 0
-    updated = 0
-    skipped = 0
-
-    for job in jobs:
-        dedupe_filter = build_notion_dedupe_filter(job, schema, mapping)
-        existing_pages = []
-        if dedupe_filter is not None:
-            existing_pages = query_existing_pages(session, token, database_id, dedupe_filter)
-
-        page_props = build_notion_page_properties(job, schema, mapping)
-        if not page_props:
-            print(f"[warn] No usable Notion properties for {job.company} — {job.title}; skipping", file=sys.stderr)
-            skipped += 1
-            continue
-
-        if existing_pages:
-            page_id = existing_pages[0]["id"]
-            notion_api(session, token, "PATCH", f"/pages/{page_id}", {"properties": page_props})
-            updated += 1
-        else:
-            notion_api(
-                session,
-                token,
-                "POST",
-                "/pages",
-                {
-                    "parent": {"database_id": database_id},
-                    "properties": page_props,
-                },
-            )
-            created += 1
-
-    print(f"Notion sync complete: created={created} updated={updated} skipped={skipped}")
 
 
 def main() -> int:
@@ -1333,11 +1050,6 @@ def main() -> int:
     print(f"Wrote: {json_path}")
     print(f"Wrote: {md_path}")
     print(f"Wrote: {discovery_path}")
-
-    if args.notion_sync:
-        sync_jobs_to_notion(jobs)
-    else:
-        print("Notion sync disabled via --no-notion-sync or NOTION_SYNC=false")
 
     if args.vault_dir:
         sync_jobs_to_vault(

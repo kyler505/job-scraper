@@ -26,7 +26,6 @@ jobs:
   scrape:
     runs-on: ubuntu-latest
     env:
-      NOTION_SYNC: 'false'
       GITHUB_TOKEN: ${{ github.token }}
       JB_REPO_TOKEN: ${{ secrets.JB_REPO_TOKEN }}
       DISCORD_CHANNEL_ID: '1519008020250492989'
