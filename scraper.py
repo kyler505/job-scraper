@@ -14,14 +14,16 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import re
 import sys
-from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Any, Iterable, Mapping
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import requests
 from bs4 import BeautifulSoup
@@ -189,6 +191,12 @@ class Job:
     updated_at: str | None
     source: str
     score: int
+    category: str = ""
+    discipline: str = "other"
+    terms: list[str] = field(default_factory=list)
+    listing_id: str = ""
+    date_posted: str | None = None
+    date_updated: str | None = None
 
     def key(self) -> tuple[str, str, str]:
         return (self.company.lower(), self.title.lower(), self.url.lower())
@@ -350,6 +358,372 @@ def parse_date_value(value: str | None) -> str | None:
         return datetime.fromisoformat(text.replace("Z", "+00:00")).date().isoformat()
     except ValueError:
         return None
+
+
+def parse_relative_age(value: str | None, now: datetime | None = None) -> str | None:
+    if not value:
+        return None
+    text = value.strip().lower()
+    match = re.fullmatch(r"(\d+)\s*([dwmy])", text)
+    if not match:
+        return None
+    qty = int(match.group(1))
+    unit = match.group(2)
+    days = {
+        "d": qty,
+        "w": qty * 7,
+        "m": qty * 30,
+        "y": qty * 365,
+    }[unit]
+    anchor = now or datetime.now(timezone.utc)
+    return (anchor.date() - timedelta(days=days)).isoformat()
+
+
+def canonicalize_url(url: str) -> str:
+    if not url:
+        return ""
+    parts = urlsplit(url.strip())
+    filtered_query = [
+        (key, value)
+        for key, value in parse_qsl(parts.query, keep_blank_values=True)
+        if not key.lower().startswith("utm_") and key.lower() not in {"ref", "gh_src", "gh_jid"}
+    ]
+    query = urlencode(filtered_query, doseq=True)
+    cleaned = urlunsplit((parts.scheme, parts.netloc.lower(), parts.path, query, ""))
+    return cleaned.rstrip("?")
+
+
+def make_listing_id(company: str, title: str, url: str) -> str:
+    basis = canonicalize_url(url) or f"{normalize(company)}::{normalize(title)}"
+    digest = hashlib.sha1(basis.encode("utf-8")).hexdigest()
+    return "-".join([
+        digest[:8],
+        digest[8:12],
+        digest[12:16],
+        digest[16:20],
+        digest[20:32],
+    ])
+
+
+def infer_category(title: str, source: str) -> str:
+    title_norm = normalize(title)
+    source_norm = normalize(source)
+    if any(term in title_norm for term in ["intern", "internship", "co-op", "coop"]):
+        return "internship"
+    if any(term in title_norm for term in ["new grad", "new graduate", "graduate", "entry level", "junior", "rotation program"]):
+        return "new-grad"
+    if "summer" in source_norm or "intern" in source_norm:
+        return "internship"
+    return "new-grad" if "new-grad" in source_norm or "new grad" in source_norm else "other"
+
+
+def infer_terms(title: str, source: str) -> list[str]:
+    source_norm = normalize(source)
+    if infer_category(title, source) == "new-grad":
+        return []
+    if "summer2027" in source_norm or "summer 2027" in source_norm:
+        return ["Summer 2027"]
+    if "summer2026" in source_norm or "summer 2026" in source_norm:
+        return ["Summer 2026"]
+    return []
+
+
+def normalize_source_label(source: str) -> str:
+    source_norm = normalize(source)
+    if "new-grad-positions" in source_norm or "new grad positions" in source_norm:
+        return "simplify-new-grad"
+    if "summer2026" in source_norm or "summer 2026" in source_norm:
+        return "simplify-internships"
+    if "summer2027" in source_norm or "summer 2027" in source_norm:
+        return "vansh-internships"
+    return source.replace("/", "-").replace(" ", "-").lower()
+
+
+def infer_discipline(title: str) -> str:
+    title_norm = normalize(title)
+    checks = [
+        ("ml", ["machine learning", "ml ", " ai", "artificial intelligence", "applied ai"]),
+        ("data", ["data engineer", "data scientist", "data analyst", "analytics", "business intelligence"]),
+        ("security", ["security", "cyber", "application security", "product security"]),
+        ("devops", ["devops", "platform", "infrastructure", "infra", "sre", "site reliability", "developer infrastructure"]),
+        ("mobile", ["ios", "android", "mobile"]),
+        ("frontend", ["frontend", "front-end", "ui engineer", "web engineer"]),
+        ("backend", ["backend", "back-end", "api engineer"]),
+        ("hardware", ["hardware", "embedded", "firmware", "electrical", "systems"]),
+    ]
+    for label, needles in checks:
+        if any(needle in title_norm for needle in needles):
+            return label
+    if any(needle in title_norm for needle in ["software", "developer", "engineer", "full stack", "full-stack", "swe"]):
+        return "swe"
+    return "other"
+
+
+PRESERVED_VAULT_FIELDS = {
+    "status",
+    "applied_date",
+    "deadline",
+    "notes",
+    "priority",
+    "apply_method",
+    "apply_result",
+    "apply_error",
+    "confirmation",
+    "resume_used",
+    "needs_review",
+}
+
+VAULT_FIELD_ORDER = [
+    "company",
+    "role",
+    "category",
+    "discipline",
+    "locations",
+    "terms",
+    "url",
+    "source",
+    "listing_id",
+    "active",
+    "date_posted",
+    "date_updated",
+    "status",
+    "applied_date",
+    "deadline",
+    "notes",
+    "priority",
+    "apply_method",
+    "apply_result",
+    "apply_error",
+    "confirmation",
+    "resume_used",
+    "needs_review",
+]
+
+
+FM_RE = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.S)
+
+
+def split_note(text: str) -> tuple[str, str]:
+    match = FM_RE.match(text)
+    if not match:
+        return "", text
+    return match.group(1), match.group(2)
+
+
+def parse_scalar(value: str) -> Any:
+    text = value.strip()
+    if text in {"null", "Null", "NULL", "~", ""}:
+        return None
+    if text in {"true", "True", "TRUE"}:
+        return True
+    if text in {"false", "False", "FALSE"}:
+        return False
+    if (text.startswith("'") and text.endswith("'")) or (text.startswith('"') and text.endswith('"')):
+        return text[1:-1]
+    if re.fullmatch(r"-?\d+", text):
+        return int(text)
+    if re.fullmatch(r"-?\d+\.\d+", text):
+        return float(text)
+    if text.startswith("[") and text.endswith("]"):
+        inner = text[1:-1].strip()
+        if not inner:
+            return []
+        return [parse_scalar(part.strip()) for part in inner.split(",")]
+    return text
+
+
+def parse_frontmatter(text: str) -> dict[str, Any]:
+    fm_text, _ = split_note(text)
+    if not fm_text:
+        return {}
+    data: dict[str, Any] = {}
+    current_list_key: str | None = None
+    for raw_line in fm_text.splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("- ") and current_list_key:
+            data.setdefault(current_list_key, []).append(parse_scalar(stripped[2:]))
+            continue
+        current_list_key = None
+        if ":" not in line:
+            continue
+        key, raw_value = line.split(":", 1)
+        key = key.strip()
+        raw_value = raw_value.strip()
+        if raw_value == "":
+            data[key] = []
+            current_list_key = key
+        else:
+            data[key] = parse_scalar(raw_value)
+    return data
+
+
+def format_scalar(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float):
+        return f"{value:.2f}".rstrip("0").rstrip(".") if not value.is_integer() else str(int(value))
+    if isinstance(value, int):
+        return str(value)
+    text = str(value)
+    if text == "" or re.search(r"[:#\[\]{}&*!|>'\"%@`\n]", text) or text.strip() != text:
+        return f"'{text}'"
+    return text
+
+
+def dump_frontmatter(data: dict[str, Any]) -> str:
+    lines: list[str] = []
+    seen: set[str] = set()
+    for key in VAULT_FIELD_ORDER + sorted(key for key in data if key not in VAULT_FIELD_ORDER):
+        if key in seen or key not in data:
+            continue
+        seen.add(key)
+        value = data[key]
+        if isinstance(value, list):
+            if not value:
+                lines.append(f"{key}: []")
+            else:
+                lines.append(f"{key}:")
+                for item in value:
+                    lines.append(f"- {format_scalar(item)}")
+        else:
+            lines.append(f"{key}: {format_scalar(value)}")
+    return "\n".join(lines)
+
+
+def write_note(path: Path, frontmatter: dict[str, Any], body: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = body.lstrip("\n")
+    fm_text = dump_frontmatter(frontmatter)
+    text = f"---\n{fm_text}\n---\n"
+    if body:
+        text += f"\n{body.rstrip()}\n"
+    path.write_text(text, encoding="utf-8")
+
+
+def slugify_filename(value: str) -> str:
+    sanitized = re.sub(r"[\\/:*?\"<>|]", "", value)
+    sanitized = re.sub(r"\s+", " ", sanitized).strip().rstrip(".")
+    return sanitized or "Untitled"
+
+
+def split_locations(location: str) -> list[str]:
+    parts = [part.strip() for part in location.split(" • ") if part.strip()]
+    cleaned = [part for part in parts if not re.fullmatch(r"\d+\s+locations?", part.lower())]
+    if cleaned:
+        return cleaned
+    return [location.strip()] if location.strip() else []
+
+
+def build_vault_frontmatter(job: Job, existing: dict[str, Any] | None = None) -> dict[str, Any]:
+    existing = existing or {}
+    existing_listing_id = str(existing.get("listing_id") or "").strip()
+    frontmatter = {key: value for key, value in existing.items() if key not in {
+        "company", "role", "category", "discipline", "locations", "terms", "url", "source", "listing_id", "active", "date_posted", "date_updated"
+    }}
+    frontmatter.update({
+        "company": job.company,
+        "role": job.title,
+        "category": job.category or infer_category(job.title, job.source),
+        "discipline": job.discipline or infer_discipline(job.title),
+        "locations": split_locations(job.location),
+        "terms": job.terms,
+        "url": canonicalize_url(job.url),
+        "source": job.source,
+        "listing_id": existing_listing_id or job.listing_id or make_listing_id(job.company, job.title, job.url),
+        "active": True,
+        "date_posted": job.date_posted or existing.get("date_posted"),
+        "date_updated": job.date_updated or existing.get("date_updated"),
+    })
+    frontmatter.setdefault("status", "to-apply")
+    frontmatter.setdefault("applied_date", None)
+    frontmatter.setdefault("deadline", None)
+    frontmatter.setdefault("notes", None)
+    return frontmatter
+
+
+def sync_jobs_to_vault(jobs: list[Job], vault_dir: Path, deactivate_missing: bool = False) -> None:
+    jobs_dir = vault_dir / "Jobs"
+    if not jobs_dir.exists():
+        raise RuntimeError(f"Vault Jobs directory not found: {jobs_dir}")
+
+    existing_by_url: dict[str, Path] = {}
+    existing_by_listing_id: dict[str, Path] = {}
+    existing_frontmatter: dict[Path, dict[str, Any]] = {}
+    existing_bodies: dict[Path, str] = {}
+
+    for path in jobs_dir.glob("*.md"):
+        text = path.read_text(encoding="utf-8")
+        fm = parse_frontmatter(text)
+        _, body = split_note(text)
+        existing_frontmatter[path] = fm
+        existing_bodies[path] = body
+        url = canonicalize_url(str(fm.get("url") or ""))
+        if url:
+            existing_by_url[url] = path
+        listing_id = str(fm.get("listing_id") or "").strip()
+        if listing_id:
+            existing_by_listing_id[listing_id] = path
+
+    seen_paths: set[Path] = set()
+    created = 0
+    updated = 0
+    reactivated = 0
+
+    for job in jobs:
+        listing_id = job.listing_id or make_listing_id(job.company, job.title, job.url)
+        canonical_url = canonicalize_url(job.url)
+        path = existing_by_url.get(canonical_url) or existing_by_listing_id.get(listing_id)
+        if path is None:
+            filename = slugify_filename(f"{job.company} - {job.title}") + ".md"
+            path = jobs_dir / filename
+            suffix = 2
+            while path.exists():
+                path = jobs_dir / f"{slugify_filename(f'{job.company} - {job.title}')} ({suffix}).md"
+                suffix += 1
+            fm = build_vault_frontmatter(job)
+            write_note(path, fm, "")
+            created += 1
+        else:
+            existing_fm = existing_frontmatter.get(path, {})
+            existing_body = existing_bodies.get(path, "")
+            fm = build_vault_frontmatter(job, existing_fm)
+            previous_active = existing_fm.get("active")
+            if previous_active is False:
+                reactivated += 1
+            if fm != existing_fm:
+                write_note(path, fm, existing_body)
+                updated += 1
+        seen_paths.add(path)
+
+    deactivated = 0
+    skipped_deactivation = 0
+    for path, fm in existing_frontmatter.items():
+        if path in seen_paths:
+            continue
+        if str(fm.get("url") or "").strip() == "":
+            continue
+        if not deactivate_missing:
+            skipped_deactivation += 1
+            continue
+        if fm.get("active") is False:
+            continue
+        fm = dict(fm)
+        fm["url"] = canonicalize_url(str(fm.get("url") or ""))
+        fm["active"] = False
+        before = path.read_text(encoding="utf-8")
+        write_note(path, fm, existing_bodies.get(path, ""))
+        after = path.read_text(encoding="utf-8")
+        if after != before:
+            deactivated += 1
+
+    print(
+        f"Vault sync complete: created={created} updated={updated} reactivated={reactivated} deactivated={deactivated} skipped_deactivation={skipped_deactivation} vault={vault_dir}"
+    )
 
 
 def parse_table_schema(headers: list[str]) -> dict[str, int | None]:
@@ -557,14 +931,23 @@ def filter_jobs(raw_jobs: list[dict], role_terms: list[str], cycle_terms: list[s
             continue
         if not any(pattern.search(title_norm) for pattern in role_patterns):
             continue
+        source = item.get("source", "")
+        normalized_source = normalize_source_label(source)
+        resolved_date = parse_date_value(item.get("updated_at")) or parse_relative_age(item.get("updated_at"))
         job = Job(
             company=item.get("company", ""),
             title=title.strip(),
             location=item.get("location", "").strip(),
-            url=item.get("url", ""),
+            url=canonicalize_url(item.get("url", "")),
             updated_at=item.get("updated_at"),
-            source=item.get("source", ""),
+            source=normalized_source,
             score=score,
+            category=infer_category(title, source),
+            discipline=infer_discipline(title),
+            terms=infer_terms(title, source),
+            listing_id=make_listing_id(item.get("company", ""), title, item.get("url", "")),
+            date_posted=resolved_date,
+            date_updated=resolved_date,
         )
         key = job.key()
         existing = results.get(key)
@@ -643,6 +1026,17 @@ def parse_args() -> argparse.Namespace:
         "--output-dir",
         default=os.getenv("OUTPUT_DIR", "outputs"),
         help="Directory where jobs.json and jobs.md are written.",
+    )
+    parser.add_argument(
+        "--vault-dir",
+        default=os.getenv("JB_VAULT_DIR", ""),
+        help="Optional path to the jb Obsidian vault root. When provided, syncs Jobs/*.md notes.",
+    )
+    parser.add_argument(
+        "--deactivate-missing-vault-jobs",
+        action="store_true",
+        default=os.getenv("JB_DEACTIVATE_MISSING", "false").lower() == "true",
+        help="Mark unmatched existing vault notes active:false. Default is off to avoid mass churn when source coverage changes.",
     )
     parser.add_argument(
         "--max-results",
@@ -926,15 +1320,16 @@ def main() -> int:
     session.headers.update({"User-Agent": USER_AGENT, "Accept": "application/json,text/plain,*/*"})
 
     raw_jobs = fetch_sources(session, sources)
-    jobs = filter_jobs(raw_jobs, role_terms=role_terms, cycle_terms=cycle_terms)
-    jobs = jobs[: args.max_results]
+    all_jobs = filter_jobs(raw_jobs, role_terms=role_terms, cycle_terms=cycle_terms)
+    jobs = all_jobs[: args.max_results]
 
     output_dir = Path(args.output_dir)
     json_path, md_path, discovery_path = write_outputs(jobs, output_dir)
 
     print(f"Sources checked: {len(sources)}")
     print(f"Raw jobs fetched: {len(raw_jobs)}")
-    print(f"Matches: {len(jobs)}")
+    print(f"Filtered matches: {len(all_jobs)}")
+    print(f"Emitted matches: {len(jobs)}")
     print(f"Wrote: {json_path}")
     print(f"Wrote: {md_path}")
     print(f"Wrote: {discovery_path}")
@@ -943,6 +1338,15 @@ def main() -> int:
         sync_jobs_to_notion(jobs)
     else:
         print("Notion sync disabled via --no-notion-sync or NOTION_SYNC=false")
+
+    if args.vault_dir:
+        sync_jobs_to_vault(
+            all_jobs,
+            Path(args.vault_dir),
+            deactivate_missing=args.deactivate_missing_vault_jobs,
+        )
+    else:
+        print("Vault sync skipped: JB_VAULT_DIR/--vault-dir not set")
 
     print()
 

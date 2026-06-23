@@ -12,7 +12,8 @@ Daily GitHub Action scraper for internship and new-grad SWE roles.
   - `outputs/jobs.json`
   - `outputs/jobs.md`
   - `outputs/discovery.md`
-- syncs the matches into a Notion database when `NOTION_TOKEN` and `NOTION_DATABASE_ID` are available
+- syncs the filtered listings into the `kyler505/jb` Obsidian vault when `JB_VAULT_DIR` points at a checked-out vault
+- still supports optional Notion sync when `NOTION_TOKEN` and `NOTION_DATABASE_ID` are available
 - can post a run summary to Discord when a Discord webhook or bot token is configured
 
 ## Local test

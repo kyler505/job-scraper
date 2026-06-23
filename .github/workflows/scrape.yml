@@ -26,10 +26,9 @@ jobs:
   scrape:
     runs-on: ubuntu-latest
     env:
-      NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-      NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
-      NOTION_SYNC: 'true'
+      NOTION_SYNC: 'false'
       GITHUB_TOKEN: ${{ github.token }}
+      JB_REPO_TOKEN: ${{ secrets.JB_REPO_TOKEN }}
       DISCORD_CHANNEL_ID: '1519008020250492989'
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
       DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
@@ -47,14 +46,37 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Clone jb vault
+        if: ${{ env.JB_REPO_TOKEN != '' }}
+        run: |
+          git clone "https://x-access-token:${JB_REPO_TOKEN}@github.com/kyler505/jb.git" jb-vault
+
       - name: Run scraper
         id: scrape
         run: |
-          python scraper.py --max-results "${{ github.event.inputs.max_results || '100' }}"
+          python scraper.py --max-results "${{ github.event.inputs.max_results || '100' }}" --vault-dir "${JB_VAULT_DIR}"
         env:
           SOURCES_JSON: ${{ github.event.inputs.sources_json }}
           ROLE_TERMS_JSON: ${{ github.event.inputs.role_terms_json }}
           CYCLE_TERMS_JSON: ${{ github.event.inputs.cycle_terms_json }}
+          JB_VAULT_DIR: ${{ github.workspace }}/jb-vault
+
+      - name: Commit jb vault changes
+        if: ${{ success() && env.JB_REPO_TOKEN != '' }}
+        run: |
+          if [ ! -d jb-vault/.git ]; then
+            echo "jb vault clone missing; skipping commit"
+            exit 0
+          fi
+          if [ -z "$(git -C jb-vault status --porcelain)" ]; then
+            echo "No jb vault changes to commit"
+            exit 0
+          fi
+          git -C jb-vault config user.name kyler505
+          git -C jb-vault config user.email kylercao18@gmail.com
+          git -C jb-vault add -A
+          git -C jb-vault commit -m "chore: daily job scrape $(date -u +%F)"
+          git -C jb-vault push
 
       - name: Upload results
         if: success()
