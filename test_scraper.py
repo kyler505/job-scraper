@@ -7,12 +7,15 @@ from scraper import (
     Job,
     build_discovery_notes,
     build_search_matrix,
+    build_vault_frontmatter,
     canonicalize_url,
     filter_jobs,
     parse_args,
     parse_frontmatter,
     sync_jobs_to_vault,
     write_outputs,
+    PRESERVED_VAULT_FIELDS,
+    SCRAPER_MANAGED_VAULT_FIELDS,
 )
 
 
@@ -60,6 +63,82 @@ class DiscoveryNotesTests(unittest.TestCase):
 
 
 class VaultSyncTests(unittest.TestCase):
+    def test_build_vault_frontmatter_preserves_autoapply_fields(self):
+        job = Job(
+            company="ByteDance",
+            title="Software Engineer Intern - Developer Infrastructure",
+            location="San Jose, CA",
+            url="https://jobs.bytedance.com/en/position/7595707875767699765/detail?utm_source=Simplify&ref=Simplify",
+            updated_at="18d",
+            source="simplify-internships",
+            score=18,
+            category="internship",
+            discipline="devops",
+            terms=["Summer 2026"],
+            listing_id="listing-1",
+            date_posted="2026-06-04",
+            date_updated="2026-06-04",
+        )
+        existing = {
+            "company": "ByteDance",
+            "role": "Old Title",
+            "category": "internship",
+            "discipline": "swe",
+            "locations": ["Old City"],
+            "terms": [],
+            "url": "https://jobs.bytedance.com/en/position/7595707875767699765/detail",
+            "source": "simplify-internships",
+            "listing_id": "listing-1",
+            "active": False,
+            "date_posted": "2026-05-01",
+            "date_updated": "2026-05-01",
+            "status": "applied",
+            "applied_date": "2026-06-10",
+            "deadline": "2026-07-01",
+            "notes": "keep me",
+            "priority": 42.5,
+            "apply_method": "easy_apply",
+            "apply_result": "submitted",
+            "apply_error": "captcha",
+            "confirmation": "ABC123",
+            "resume_used": "resume-v3.pdf",
+            "needs_review": True,
+            "custom_field": "leave alone",
+        }
+
+        fm = build_vault_frontmatter(job, existing)
+
+        self.assertTrue({
+            "status",
+            "applied_date",
+            "deadline",
+            "notes",
+            "priority",
+            "apply_method",
+            "apply_result",
+            "apply_error",
+            "confirmation",
+            "resume_used",
+            "needs_review",
+        }.issubset(PRESERVED_VAULT_FIELDS))
+        self.assertNotIn("status", SCRAPER_MANAGED_VAULT_FIELDS)
+        self.assertNotIn("apply_result", SCRAPER_MANAGED_VAULT_FIELDS)
+        self.assertEqual(fm["status"], "applied")
+        self.assertEqual(fm["applied_date"], "2026-06-10")
+        self.assertEqual(fm["deadline"], "2026-07-01")
+        self.assertEqual(fm["notes"], "keep me")
+        self.assertEqual(fm["priority"], 42.5)
+        self.assertEqual(fm["apply_method"], "easy_apply")
+        self.assertEqual(fm["apply_result"], "submitted")
+        self.assertEqual(fm["apply_error"], "captcha")
+        self.assertEqual(fm["confirmation"], "ABC123")
+        self.assertEqual(fm["resume_used"], "resume-v3.pdf")
+        self.assertTrue(fm["needs_review"])
+        self.assertEqual(fm["custom_field"], "leave alone")
+        self.assertEqual(fm["role"], job.title)
+        self.assertEqual(fm["locations"], ["San Jose, CA"])
+        self.assertTrue(fm["active"])
+
     def test_filter_jobs_enriches_vault_fields(self):
         raw_jobs = [
             {

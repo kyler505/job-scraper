@@ -444,6 +444,21 @@ PRESERVED_VAULT_FIELDS = {
     "needs_review",
 }
 
+SCRAPER_MANAGED_VAULT_FIELDS = {
+    "company",
+    "role",
+    "category",
+    "discipline",
+    "locations",
+    "terms",
+    "url",
+    "source",
+    "listing_id",
+    "active",
+    "date_posted",
+    "date_updated",
+}
+
 VAULT_FIELD_ORDER = [
     "company",
     "role",
@@ -593,9 +608,11 @@ def split_locations(location: str) -> list[str]:
 def build_vault_frontmatter(job: Job, existing: dict[str, Any] | None = None) -> dict[str, Any]:
     existing = existing or {}
     existing_listing_id = str(existing.get("listing_id") or "").strip()
-    frontmatter = {key: value for key, value in existing.items() if key not in {
-        "company", "role", "category", "discipline", "locations", "terms", "url", "source", "listing_id", "active", "date_posted", "date_updated"
-    }}
+    frontmatter = {
+        key: value
+        for key, value in existing.items()
+        if key not in SCRAPER_MANAGED_VAULT_FIELDS
+    }
     frontmatter.update({
         "company": job.company,
         "role": job.title,
