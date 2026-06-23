@@ -2,7 +2,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scraper import Job, PropertyMapping, build_discovery_notes, build_notion_page_properties, write_outputs
+from scraper import (
+    Job,
+    PropertyMapping,
+    build_discovery_notes,
+    build_notion_page_properties,
+    build_search_matrix,
+    write_outputs,
+)
 
 
 class BuildNotionPagePropertiesTests(unittest.TestCase):
@@ -55,11 +62,18 @@ class BuildNotionPagePropertiesTests(unittest.TestCase):
 
 
 class DiscoveryNotesTests(unittest.TestCase):
+    def test_search_matrix_has_multiple_ats_families(self):
+        matrix = build_search_matrix()
+        self.assertIn("High-precision startup ATS", matrix)
+        self.assertIn("Broader enterprise ATS", matrix)
+        self.assertIn("Long-tail ATS / SMB boards", matrix)
+        self.assertIn("Role families", matrix)
+
     def test_discovery_notes_include_ats_search_queries(self):
         notes = build_discovery_notes()
-        self.assertIn("site:http://jobs.ashbyhq.com", notes)
-        self.assertIn("jobs.lever.co", notes)
-        self.assertIn("LinkedIn", notes)
+        self.assertIn("site:jobs.ashbyhq.com", notes)
+        self.assertIn("site:wd1.myworkdayjobs.com", notes)
+        self.assertIn("High-recall query examples", notes)
 
     def test_write_outputs_creates_discovery_note(self):
         job = Job(

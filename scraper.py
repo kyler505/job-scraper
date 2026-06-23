@@ -77,37 +77,85 @@ DEFAULT_CYCLE_TERMS = [
     "coop",
 ]
 
+ATS_MATRIX = [
+    {
+        "label": "High-precision startup ATS",
+        "domains": ["jobs.ashbyhq.com", "boards.greenhouse.io", "jobs.lever.co"],
+        "template": 'site:{domain} ({role} OR {role_alt}) {cycle}',
+        "use_when": "You want fewer false positives and fresher startup postings.",
+    },
+    {
+        "label": "Broader enterprise ATS",
+        "domains": ["careers.icims.com", "jobs.jobvite.com", "wd1.myworkdayjobs.com"],
+        "template": 'site:{domain} ({role} OR {role_alt} OR {team}) {cycle}',
+        "use_when": "You want wider company coverage and are willing to sort noise.",
+    },
+    {
+        "label": "Long-tail ATS / SMB boards",
+        "domains": ["jobs.bamboohr.com", "jobs.smartrecruiters.com", "apply.jazz.co", "careers.workable.com"],
+        "template": 'site:{domain} ({role} OR {team}) {cycle}',
+        "use_when": "You want smaller-company openings that LinkedIn often misses.",
+    },
+]
+
+ROLE_FAMILIES = [
+    {"label": "core SWE", "terms": ["software engineer", "software developer", "swe"]},
+    {"label": "platform / infra", "terms": ["platform", "infrastructure", "infra", "systems"]},
+    {"label": "product / full stack", "terms": ["full stack", "frontend", "backend", "product engineer"]},
+    {"label": "specialist", "terms": ["security engineer", "mobile engineer", "api engineer", "developer experience"]},
+]
+
 DISCOVERY_NOTES = """# How to find jobs
 
 Most jobs are not posted on LinkedIn. Use Google with ATS site searches to find
 them earlier and with less competition.
 
-## Search pattern
+## Search matrix
 
-1. Go to Google.
-2. Search with a site-restricted query, for example:
+{matrix}
 
-   ```
-   site:http://jobs.ashbyhq.com ("product intern" OR "pm intern" OR "product management intern")
-   ```
+## Query construction
 
-3. Swap the site to widen the search:
+1. Pick one ATS family from the matrix.
+2. Pick a role family.
+3. Add the cycle term (`intern`, `internship`, `new grad`, etc.).
+4. Add a location or team keyword only if the query is too broad.
+5. Run the same query across multiple domains and dedupe the results.
 
-   - `http://boards.greenhouse.io`
-   - `http://jobs.lever.co`
-   - `http://careers.icims.com`
-   - `http://jobs.jobvite.com`
-   - `http://wd1.myworkdayjobs.com`
-   - `http://jobs.bamboohr.com`
-   - `http://jobs.smartrecruiters.com`
-   - `http://apply.jazz.co`
-   - `http://careers.workable.com`
+### High-precision query examples
 
-4. Add a role, location, or skill boolean to narrow it down.
+- `site:jobs.ashbyhq.com ("software engineer" OR swe) internship`
+- `site:boards.greenhouse.io ("platform" OR infra) "new grad"`
+- `site:jobs.lever.co ("full stack" OR frontend) intern`
+
+### High-recall query examples
+
+- `site:wd1.myworkdayjobs.com (software OR engineer) (intern OR "new grad")`
+- `site:jobs.smartrecruiters.com (backend OR platform) entry level`
+- `site:careers.icims.com (developer OR "software engineer") graduate`
 
 Startup roles are often never posted publicly on LinkedIn, so going where the
 jobs actually live tends to surface better openings faster.
 """
+
+
+def build_search_matrix() -> str:
+    lines: list[str] = []
+    for section in ATS_MATRIX:
+        domains = ", ".join(f"`site:{domain}`" for domain in section["domains"])
+        lines.append(f"- **{section['label']}**")
+        lines.append(f"  - Domains: {domains}")
+        lines.append(f"  - Pattern: `{section['template']}`")
+        lines.append(f"  - When to use: {section['use_when']}")
+    lines.append("")
+    lines.append("### Role families")
+    for family in ROLE_FAMILIES:
+        terms = ", ".join(f"`{term}`" for term in family["terms"])
+        lines.append(f"- **{family['label']}**: {terms}")
+    return "\n".join(lines)
+
+
+
 
 USER_AGENT = (
     "job-scraper/1.0 (+https://github.com/kyler505/job-scraper) "
@@ -530,7 +578,7 @@ def filter_jobs(raw_jobs: list[dict], role_terms: list[str], cycle_terms: list[s
 
 
 def build_discovery_notes() -> str:
-    return DISCOVERY_NOTES.strip() + "\n"
+    return DISCOVERY_NOTES.format(matrix=build_search_matrix()).strip() + "\n"
 
 
 def write_outputs(jobs: list[Job], output_dir: Path) -> tuple[Path, Path, Path]:
