@@ -66,9 +66,10 @@ jobs:
 
       - name: Post Discord run result
         if: always()
+        continue-on-error: true
         run: python scripts/post_discord_run.py
         env:
-          RUN_STATUS: ${{ steps.scrape.conclusion }}
+          RUN_STATUS: ${{ steps.scrape.outcome }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           WORKFLOW_NAME: Daily Job Scrape
           OUTPUT_DIR: outputs
