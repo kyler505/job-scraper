@@ -30,6 +30,9 @@ jobs:
       NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
       NOTION_SYNC: 'true'
       GITHUB_TOKEN: ${{ github.token }}
+      DISCORD_CHANNEL_ID: '1519008020250492989'
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -45,6 +48,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run scraper
+        id: scrape
         run: |
           python scraper.py --max-results "${{ github.event.inputs.max_results || '100' }}"
         env:
@@ -53,8 +57,18 @@ jobs:
           CYCLE_TERMS_JSON: ${{ github.event.inputs.cycle_terms_json }}
 
       - name: Upload results
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: job-scrape-results
           path: outputs/
           if-no-files-found: error
+
+      - name: Post Discord run result
+        if: always()
+        run: python scripts/post_discord_run.py
+        env:
+          RUN_STATUS: ${{ steps.scrape.conclusion }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          WORKFLOW_NAME: Daily Job Scrape
+          OUTPUT_DIR: outputs

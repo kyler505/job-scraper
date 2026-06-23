@@ -11,7 +11,9 @@ Daily GitHub Action scraper for internship and new-grad SWE roles.
 - writes results to:
   - `outputs/jobs.json`
   - `outputs/jobs.md`
+  - `outputs/discovery.md`
 - syncs the matches into a Notion database when `NOTION_TOKEN` and `NOTION_DATABASE_ID` are available
+- can post a run summary to Discord when a Discord webhook or bot token is configured
 
 ## Local test
 
@@ -62,6 +64,15 @@ The sync now prefers semantically named fields and avoids guessing `score` into 
 
 The sync is idempotent when a URL property is available; otherwise it falls back to title/company matching.
 
+## Discord notifications
+
+The GitHub Actions workflow can post a completion message to Discord. Configure one of:
+
+- `DISCORD_WEBHOOK_URL`
+- `DISCORD_BOT_TOKEN` + `DISCORD_CHANNEL_ID`
+
+The workflow defaults `DISCORD_CHANNEL_ID` to `1519008020250492989`.
+
 ## GitHub Action
 
 The workflow runs on a daily schedule and can also be triggered manually.
@@ -76,3 +87,4 @@ You can override the search terms through `workflow_dispatch` inputs:
 
 Edit `DEFAULT_SOURCES` in `scraper.py` to add more GitHub repos or ATS boards.
 If you want broader results, pass custom source / role / cycle terms through the workflow inputs.
+The generated `outputs/discovery.md` contains Google ATS search queries you can reuse manually.

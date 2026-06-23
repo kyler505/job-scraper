@@ -77,6 +77,38 @@ DEFAULT_CYCLE_TERMS = [
     "coop",
 ]
 
+DISCOVERY_NOTES = """# How to find jobs
+
+Most jobs are not posted on LinkedIn. Use Google with ATS site searches to find
+them earlier and with less competition.
+
+## Search pattern
+
+1. Go to Google.
+2. Search with a site-restricted query, for example:
+
+   ```
+   site:http://jobs.ashbyhq.com ("product intern" OR "pm intern" OR "product management intern")
+   ```
+
+3. Swap the site to widen the search:
+
+   - `http://boards.greenhouse.io`
+   - `http://jobs.lever.co`
+   - `http://careers.icims.com`
+   - `http://jobs.jobvite.com`
+   - `http://wd1.myworkdayjobs.com`
+   - `http://jobs.bamboohr.com`
+   - `http://jobs.smartrecruiters.com`
+   - `http://apply.jazz.co`
+   - `http://careers.workable.com`
+
+4. Add a role, location, or skill boolean to narrow it down.
+
+Startup roles are often never posted publicly on LinkedIn, so going where the
+jobs actually live tends to surface better openings faster.
+"""
+
 USER_AGENT = (
     "job-scraper/1.0 (+https://github.com/kyler505/job-scraper) "
     "requests"
@@ -497,10 +529,15 @@ def filter_jobs(raw_jobs: list[dict], role_terms: list[str], cycle_terms: list[s
     )
 
 
-def write_outputs(jobs: list[Job], output_dir: Path) -> tuple[Path, Path]:
+def build_discovery_notes() -> str:
+    return DISCOVERY_NOTES.strip() + "\n"
+
+
+def write_outputs(jobs: list[Job], output_dir: Path) -> tuple[Path, Path, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / "jobs.json"
     md_path = output_dir / "jobs.md"
+    discovery_path = output_dir / "discovery.md"
 
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -526,9 +563,15 @@ def write_outputs(jobs: list[Job], output_dir: Path) -> tuple[Path, Path]:
             )
     else:
         lines.append("No matches found.")
+    lines.extend([
+        "",
+        "## Discovery tips",
+        "See `discovery.md` for the ATS search strategy that complements the scraped boards.",
+    ])
     md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    discovery_path.write_text(build_discovery_notes(), encoding="utf-8")
 
-    return json_path, md_path
+    return json_path, md_path, discovery_path
 
 
 def parse_args() -> argparse.Namespace:
@@ -839,13 +882,14 @@ def main() -> int:
     jobs = jobs[: args.max_results]
 
     output_dir = Path(args.output_dir)
-    json_path, md_path = write_outputs(jobs, output_dir)
+    json_path, md_path, discovery_path = write_outputs(jobs, output_dir)
 
     print(f"Sources checked: {len(sources)}")
     print(f"Raw jobs fetched: {len(raw_jobs)}")
     print(f"Matches: {len(jobs)}")
     print(f"Wrote: {json_path}")
     print(f"Wrote: {md_path}")
+    print(f"Wrote: {discovery_path}")
 
     if args.notion_sync:
         sync_jobs_to_notion(jobs)
